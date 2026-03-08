@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Pale Blue Dot - beta</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000105; font-family: 'Courier New', monospace; }
+        canvas { display: block; }
+        
+        /* UIレイヤー共通 */
+        .ui-btn { background: none; border: none; color: rgba(0, 200, 255, 0.4); font-size: 11px; letter-spacing: 0.2em; cursor: pointer; pointer-events: auto; transition: 0.5s; padding: 10px; }
+        .ui-btn:hover { color: #fff; text-shadow: 0 0 10px #00ccff; }
+        
+        #ui-layer { position: fixed; bottom: 30px; width: 100%; display: flex; justify-content: space-between; padding: 0 40px; box-sizing: border-box; pointer-events: none; z-index: 100; }
+        #top-ui { position: fixed; top: 30px; right: 40px; display: flex; gap: 20px; z-index: 100; }
+
+        /* 操作ガイド */
+        #help-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 1, 5, 0.85); display: none; justify-content: center; align-items: center; z-index: 1000; pointer-events: auto; }
+        #help-card { border: 1px solid rgba(0, 200, 255, 0.2); padding: 40px; color: rgba(0, 200, 255, 0.8); font-size: 12px; line-height: 2; letter-spacing: 0.1em; }
+        .help-section { margin-bottom: 20px; }
+        .help-title { border-bottom: 1px solid rgba(0, 200, 255, 0.2); margin-bottom: 10px; color: #fff; }
+
+        #info-label { position: fixed; top: 30px; left: 40px; color: rgba(0, 200, 255, 0.4); font-size: 10px; opacity: 0; transition: 0.5s; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+</head>
+<body>
+    <div id="info-label">IDENTIFIED</div>
+
+    <div id="top-ui">
+        <button id="gas-toggle" class="ui-btn">GAS: ON</button>
+        <button id="help-trigger" class="ui-btn">?</button>
+    </div>
+
+    <div id="ui-layer">
+        <div id="scale-bar-container" style="color: rgba(0, 200, 255, 0.4); font-size: 10px;">
+            <span id="scale-text">100 LY</span>
+            <div style="width: 100px; height: 1px; background: rgba(0, 200, 255, 0.3); margin-top: 5px;"></div>
+        </div>
+        <button id="earth-btn" class="ui-btn">EARTH</button>
+    </div>
+
+    <div id="help-overlay">
+        <div id="help-card">
+            <div class="help-section">
+                <div class="help-title">[PC NAVIGATION]</div>
+                ・Left Drag   : Rotate<br>
+                ・Right Drag  : Pan (Move Camera)<br>
+                ・Scroll      : Zoom In/Out
+            </div>
+            <div class="help-section">
+                <div class="help-title">[MOBILE NAVIGATION]</div>
+                ・1 Finger    : Rotate<br>
+                ・2 Fingers   : Pan / Zoom
+            </div>
+            <button id="help-close" class="ui-btn" style="margin-top: 20px;">CLOSE</button>
+        </div>
+    </div>
+
+    <script>
+        const scene = new THREE.Scene();
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+        document.body.appendChild(renderer.domElement);
+
+        const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 50000);
+        camera.position.set(-2000, 1500, 3000);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.enablePan = true;
+        controls.screenSpacePanning = true;
+
+        // --- Shaders ---
+        const starMaterial = new THREE.ShaderMaterial({
+            uniforms: { time: { value: 0 } },
+            vertexShader: `
+                attribute float size;
+                attribute vec3 color;
+                varying vec3 vColor;
+                uniform float time;
+                void main() {
+                    vColor = color;
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    float twinkle = sin(time * 1.5 + position.x * 0.1) * 0.2 + 0.8;
+                    gl_PointSize = size * (3000.0 / -mvPosition.z) * twinkle; 
+                    gl_Position = projectionMatrix * mvPosition;
+                }
+            `,
+            fragmentShader: `
+                varying vec3 vColor;
+                void main() {
+                    float d = length(gl_PointCoord - vec2(0.5));
+                    if (d > 0.5) discard;
+                    float core = smoothstep(0.18, 0.0, d);
+                    float halo = pow(1.0 - d * 2.0, 4.0) * 0.6;
+                    gl_FragColor = vec4(vColor * (core + halo), core + halo);
+                }
+            `,
+            blending: THREE.AdditiveBlending, depthWrite: false, transparent: true
+        });
+
+        const nebulaMaterial = new THREE.ShaderMaterial({
+            vertexShader: `
+                attribute float size;
+                void main() {
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    gl_PointSize = size * (2500.0 / -mvPosition.z);
+                    gl_Position = projectionMatrix * mvPosition;
+                }
+            `,
+            fragmentShader: `
+                void main() {
+                    float d = length(gl_PointCoord - vec2(0.5));
+                    if (d > 0.5) discard;
+                    float cloud = smoothstep(0.5, 0.0, d) * 0.012; 
+                    gl_FragColor = vec4(0.1, 0.3, 0.8, cloud);
+                }
+            `,
+            blending: THREE.AdditiveBlending, depthWrite: false, transparent: true
+        });
+
+        // --- Data ---
+        const starCount = 20000;
+        const nebulaCount = 400;
+        const starGeo = new THREE.BufferGeometry();
+        const nebulaGeo = new THREE.BufferGeometry();
+        
+        const starPos = new Float32Array(starCount * 3);
+        const starCols = new Float32Array(starCount * 3);
+        const starSizes = new Float32Array(starCount);
+        const nebulaPos = new Float32Array(nebulaCount * 3);
+        const nebulaSizes = new Float32Array(nebulaCount);
+
+        const CENTER_OFFSET = new THREE.Vector3(-3000, 0, 0);
+
+        for (let i = 0; i < starCount; i++) {
+            let x, y, z, c, s;
+            if (i === 0) { // 地球のみ強調
+                x = 0; y = 0; z = 0;
+                c = new THREE.Color(0x00ffff);
+                s = 2.0; 
+            } else {
+                const dist = 500 + Math.pow(Math.random(), 1.6) * 6000;
+                const arm = (i % 4) * (Math.PI / 2);
+                const spiral = arm + (dist * 0.0015) + (Math.random()-0.5)*2.5;
+                x = Math.cos(spiral) * dist + CENTER_OFFSET.x;
+                z = Math.sin(spiral) * dist + CENTER_OFFSET.z;
+                // 平坦さを和らげるためy方向の広がりを少し強化
+                y = (Math.random() - 0.5) * (800 * Math.exp(-dist * 0.0008)); 
+                const h = 0.55 + Math.random() * 0.15;
+                c = new THREE.Color().setHSL(h, 0.4, 0.7);
+                s = 0.8 + Math.random() * 1.5;
+            }
+            starPos[i*3] = x; starPos[i*3+1] = y; starPos[i*3+2] = z;
+            starCols[i*3] = c.r; starCols[i*3+1] = c.g; starCols[i*3+2] = c.b;
+            starSizes[i] = s;
+        }
+
+        for (let i = 0; i < nebulaCount; i++) {
+            const dist = Math.random() * 7000;
+            const arm = (i % 4) * (Math.PI / 2);
+            const spiral = arm + (dist * 0.0015) + (Math.random() - 0.5) * 3.0;
+            nebulaPos[i*3] = Math.cos(spiral) * dist + CENTER_OFFSET.x;
+            nebulaPos[i*3+1] = (Math.random() - 0.5) * 1000;
+            nebulaPos[i*3+2] = Math.sin(spiral) * dist + CENTER_OFFSET.z;
+            nebulaSizes[i] = 800 + Math.random() * 2500;
+        }
+
+        starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+        starGeo.setAttribute('color', new THREE.BufferAttribute(starCols, 3));
+        starGeo.setAttribute('size', new THREE.BufferAttribute(starSizes, 1));
+        nebulaGeo.setAttribute('position', new THREE.BufferAttribute(nebulaPos, 3));
+        nebulaGeo.setAttribute('size', new THREE.BufferAttribute(nebulaSizes, 1));
+
+        const starPoints = new THREE.Points(starGeo, starMaterial);
+        const nebulaPoints = new THREE.Points(nebulaGeo, nebulaMaterial);
+        scene.add(starPoints);
+        scene.add(nebulaPoints);
+
+        // --- Interaction Logic ---
+        let lastInteractionTime = Date.now();
+        const resetTimer = () => { lastInteractionTime = Date.now(); };
+        window.addEventListener('mousemove', resetTimer);
+        window.addEventListener('touchstart', resetTimer);
+
+        document.getElementById('earth-btn').onclick = () => {
+            resetTimer();
+            gsap.to(camera.position, { x: 0, y: 5, z: 15, duration: 4, ease: "power3.inOut" });
+            gsap.to(controls.target, { x: 0, y: 0, z: 0, duration: 4 });
+        };
+
+        const gasBtn = document.getElementById('gas-toggle');
+        gasBtn.onclick = () => {
+            nebulaPoints.visible = !nebulaPoints.visible;
+            gasBtn.innerText = `GAS: ${nebulaPoints.visible ? 'ON' : 'OFF'}`;
+        };
+
+        const helpOverlay = document.getElementById('help-overlay');
+        document.getElementById('help-trigger').onclick = () => helpOverlay.style.display = 'flex';
+        document.getElementById('help-close').onclick = () => helpOverlay.style.display = 'none';
+
+        const clock = new THREE.Clock();
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = clock.getElapsedTime();
+            starMaterial.uniforms.time.value = time;
+            
+            // スクリーンセーバー機能（5秒無操作で自動回転）
+            if (Date.now() - lastInteractionTime > 5000) {
+                controls.autoRotate = true;
+                controls.autoRotateSpeed = 0.5;
+            } else {
+                controls.autoRotate = false;
+            }
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.onresize = () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        };
+    </script>
+</body>
+</html>
