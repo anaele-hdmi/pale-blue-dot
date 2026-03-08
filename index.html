@@ -141,7 +141,7 @@
 
         for (let i = 0; i < starCount; i++) {
             let x, y, z, c, s;
-            if (i === 0) { // 地球のみ強調
+            if (i === 0) { // 地球
                 x = 0; y = 0; z = 0;
                 c = new THREE.Color(0x00ffff);
                 s = 2.0; 
@@ -151,7 +151,6 @@
                 const spiral = arm + (dist * 0.0015) + (Math.random()-0.5)*2.5;
                 x = Math.cos(spiral) * dist + CENTER_OFFSET.x;
                 z = Math.sin(spiral) * dist + CENTER_OFFSET.z;
-                // 平坦さを和らげるためy方向の広がりを少し強化
                 y = (Math.random() - 0.5) * (800 * Math.exp(-dist * 0.0008)); 
                 const h = 0.55 + Math.random() * 0.15;
                 c = new THREE.Color().setHSL(h, 0.4, 0.7);
@@ -205,12 +204,33 @@
         document.getElementById('help-trigger').onclick = () => helpOverlay.style.display = 'flex';
         document.getElementById('help-close').onclick = () => helpOverlay.style.display = 'none';
 
+        // 縮尺更新関数
+        const scaleText = document.getElementById('scale-text');
+        function updateScale() {
+            const dist = camera.position.length();
+            let val, unit;
+            if (dist < 10) { 
+                val = (dist * 10).toFixed(1); 
+                unit = "AU"; 
+            } else if (dist < 2000) { 
+                val = Math.round(dist); 
+                unit = "LY"; 
+            } else { 
+                val = (dist / 1000).toFixed(1); 
+                unit = "kLY"; 
+            }
+            scaleText.innerText = `${val} ${unit}`;
+        }
+
         const clock = new THREE.Clock();
         function animate() {
             requestAnimationFrame(animate);
             const time = clock.getElapsedTime();
             starMaterial.uniforms.time.value = time;
             
+            // 縮尺の更新
+            updateScale();
+
             // スクリーンセーバー機能（5秒無操作で自動回転）
             if (Date.now() - lastInteractionTime > 5000) {
                 controls.autoRotate = true;
